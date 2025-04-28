@@ -35,6 +35,14 @@ class Value(Expression):
 
     def __init__(self, value):
         super().__init__()
+
+        # Strip leading and trailing quotes
+        if isinstance(value, str):
+            value = value.strip('"').strip("'")
+            try:
+                value = int(value)
+            except ValueError:
+                pass
         self.value = value
 
     def __repr__(self):
@@ -94,38 +102,47 @@ class Operation(Expression):
         """
         Evaluate the operation.
         """
+
+        # Evaluate the left and right operands
         left_value = self.left.evaluate(environment)
         right_value = self.right.evaluate(environment)
 
+        result = 0
+
         # Arithmetic operations
         if self.operator == '+':
-            return left_value + right_value
+            result = left_value + right_value
         elif self.operator == '-':
-            return left_value - right_value
+            result = left_value - right_value
         elif self.operator == '*':
-            return left_value * right_value
+            result = left_value * right_value
         elif self.operator == '/':
-            return left_value / right_value
+            result = left_value / right_value
 
         # Logical operations
         elif self.operator == '==':
-            return left_value == right_value
+            result = left_value == right_value
         elif self.operator == '<':
-            return left_value < right_value
+            result = left_value < right_value
         elif self.operator == '>':
-            return left_value > right_value
+            result = left_value > right_value
         elif self.operator == '<=':
-            return left_value <= right_value
+            result = left_value <= right_value
         elif self.operator == '>=':
-            return left_value >= right_value
+            result = left_value >= right_value
         elif self.operator == '!=':
-            return left_value != right_value
+            result = left_value != right_value
 
         else:
             raise ValueError(f"Invalid operator: {self.operator}")
 
+        if environment["__verbose"]:
+            click.echo(f"Evaluated: {self.left} {self.operator} {self.right} = {result}")
+
+        return result
+
     def __repr__(self):
-        return f"({self.left} {self.operator} {self.right})"
+        return f"Operation({self.left} {self.operator} {self.right})"
 
 class Line:
     """
@@ -169,6 +186,26 @@ class Statement:
         """
         raise NotImplementedError("Statement execution must be implemented in subclasses.")
 
+class RemStatement(Statement):
+    """
+    A class representing a REM statement.
+    
+    Attributes:
+        comment (str): The comment string.
+    """
+
+    def __init__(self, line):
+        super().__init__(line)
+
+    def __repr__(self):
+        return f"RemStatement()"
+
+    def execute(self, environment):
+        """
+        Execute the REM statement.
+        """
+        pass
+
 class PrintStatement(Statement):
     """
     A class representing a PRINT statement.
@@ -203,6 +240,12 @@ class InputStatement(Statement):
         super().__init__(line)
         self.identifier = identifier
 
+        if prompt:
+            # Strip leading and trailing quotes or whitespace
+            prompt = prompt.strip().strip('"').strip("'")
+
+        self.prompt = prompt
+
     def __repr__(self):
         return f"InputStatement({self.identifier}, {self.prompt})"
 
@@ -210,7 +253,7 @@ class InputStatement(Statement):
         """
         Execute the INPUT statement.
         """
-        value = click.prompt(prompt)
+        value = click.prompt(self.prompt if self.prompt else "", type=str)
 
         # Automatically cast to number if possible
         try:
@@ -242,6 +285,9 @@ class GotoStatement(Statement):
         # Set the program counter to the specified line number
         environment['__program_counter'] = self.line_number
 
+        if environment["__verbose"]:
+            click.echo(f"GOTO {self.line_number}")
+
 class LetStatement(Statement):
     """
     A class representing a LET statement.
@@ -266,3 +312,50 @@ class LetStatement(Statement):
         value = self.expression.evaluate(environment)
         environment[self.identifier.name] = value
 
+        if environment["__verbose"]:
+            click.echo(f"LET {self.identifier.name} = {value}")
+
+class IfStatement (Statement): # IF <expression> GOTO <line_number>
+    """
+    A class representing an IF statement.
+    
+    Attributes:
+        condition (Expression): The condition to evaluate.
+        line_number (int): The line number to go to if the condition is true.
+    """
+
+    def __init__(self, line, condition, line_number):
+        super().__init__(line)
+        self.condition = condition
+        self.line_number = line_number
+
+    def __repr__(self):
+        return f"IfStatement({self.condition}, {self.line_number})"
+
+    def execute(self, environment):
+        """
+        Execute the IF statement.
+        """
+        if self.condition.evaluate(environment):
+            environment['__program_counter'] = self.line_number
+
+class ElseStatement(Statement):
+    """
+    A class representing an ELSE statement.
+    
+    Attributes:
+        line_number (int): The line number to go to if the condition is false.
+    """
+
+    def __init__(self, line, line_number):
+        super().__init__(line)
+        self.line_number = line_number
+
+    def __repr__(self):
+        return f"ElseStatement({self.line_number})"
+
+    def execute(self, environment):
+        """
+        Execute the ELSE statement.
+        """
+        environment['__program_counter'] = self.line_number

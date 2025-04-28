@@ -1,1 +1,9 @@
-10 LET test = 100
+5 REM A simple program that greets you number times
+10 INPUT number "Enter a number"
+20 INPUT name "Enter your name"
+30 LET loop = 0
+40 PRINT "Hello, " + name
+50 IF loop >= number GOTO 80
+60 LET loop = loop + 1
+70 GOTO 40
+80 PRINT ""
