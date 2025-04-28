@@ -1,8 +1,1 @@
-5 PRINT "Enter a number"
-10 INPUT x
-20 IF x > 10 GOTO 40 
-30 ELSE GOTO 60
-40 PRINT "Hello"
-50 GOTO 70
-60 PRINT "Goodbye"
-70 PRINTLN " World!"
+10 LET test = 100

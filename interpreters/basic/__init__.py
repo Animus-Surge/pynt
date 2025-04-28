@@ -5,14 +5,13 @@ BASIC interpreter
 """
 
 import click
-from interpreters.basic.classes import Statement
+import interpreters.basic.classes as classes
+
+environment = {}
 
 program = []
-program_counter = 0
 
-variables = {}
-
-echo_output = False
+parse_line_number = 0
 
 def run(file, verbose=False):
     """
@@ -21,262 +20,184 @@ def run(file, verbose=False):
         file (str): The path to the BASIC file to run.
         verbose (bool): If True, enable verbose output.
     """
-    global program, program_counter, echo_output
+    global environment
 
     if verbose:
-        echo_output = True
+        environment['__verbose'] = True
 
     # Open the file and read its contents
     with open(file, 'r') as f:
         code = f.read()
 
+
+    # PARSING STEP
+
     # Split the code into lines
     lines = code.split('\n')
-
-    # Process each line of code into statements
     for line in lines:
         if len(line) == 0:
-            continue # Ignore empty lines
-
-        # Convert the code to a list of Statements
-        line_num = line.split(maxsplit=1)[0]
-        line_stmt = line.split(maxsplit=1)[1]
-
-        try:
-            line_num = int(line_num)
-        except ValueError:
-            click.echo(f"Invalid line number: {line_num}; {line}", err=True)
-            exit(1)
-
-        statement = Statement(line_num, line_stmt)
-
-        program.append(statement)
-
-    if len(program) == 0:
-        click.echo("No code to run", err=True)
-        exit(1)
-
-    program_index = 0
-    program_counter = program[program_index].line_number
-    max_line = program[-1].line_number
-
-    while program_counter <= max_line:
-        # Find the current statement
-        for i, statement in enumerate(program):
-            if statement.line_number == program_counter:
-                program_index = i
-                break
-
-        # Parse the statement
-        line = program[program_index].statement
-        parse(line, program_counter)
-
-        # Increment the program counter
-        if program_counter != program[program_index].line_number:
-            # GOTO modified this
             continue
-        if program_index + 1 >= len(program):
-            break # End of program
-        program_counter = program[program_index + 1].line_number
-        
-def parse(line, linenum):
-    global program_counter, variables, echo_output
-    tokens = line.split()
+        # Parse the line into a Line object
+        line_obj = parse_line(line)
 
-    if echo_output:
-        click.echo(f"Line: {linenum} {line}")
+        if verbose:
+            click.echo(f"Parsed: {line} -> {line_obj}")
+
+        program.append(line_obj)
+
+
+
+def parse_line(line):
+    """
+    Parse a line of BASIC code.
+    Args:
+        line (str): A line of BASIC code.
+    Returns:
+        Line: A Line object representing the parsed line.
+    """
+    global parse_line_number
+
+    line_parts = line.split(" ", 1) # Separate line number and actual code
+    if len(line_parts) == 1: # No line number (so sequential line number instead)
+        line_number = parse_line_number
+        parse_line_number += 1
+        code = line_parts[0]
+    else:
+        line_number = int(line_parts[0])
+        code = line_parts[1]
+
+    # Tokenize the code
+    tokens = tokenize(code)
+    return line(line_number, parse_tokens(tokens))
+
+def tokenize(line):
+    """
+    Tokenize a line of BASIC code.
+    Args:
+        line (str): A line of BASIC code.
+    Returns:
+        list: A list of tokens.
+    """
+    tokens = []
+    token = ""
+    in_string = False
+    in_comment = False
+
+    for char in line:
+        if char == '"':
+            in_string = not in_string
+            token += char
+        elif char.isspace() and not in_string and not in_comment:
+            if token:
+                tokens.append(token.strip())
+                token = ""
+        else:
+            token += char
+
+    if token:
+        tokens.append(token.strip())
+
+    return tokens
+
+def parse_tokens(tokens):
+    """
+    Parse a list of tokens into a BASIC expression.
+    Args:
+        tokens (list): A list of tokens.
+    Returns:
+        Expression: The parsed expression.
+    """
 
     if len(tokens) == 0:
-        return # Ignore empty lines
+        return None
 
-    if tokens[0] == "PRINT": # PRINT <string>
-        # TODO: variable checking
-        output = ' '.join(tokens[1:])
-        if output.startswith('"') and output.endswith('"'): # TODO: go through each token and have a better error message
-            click.echo(output[1:-1], nl=False)
+    keyword = tokens.pop(0).upper()
+
+    if keyword == "LET":
+        return parse_let_stmt(tokens)
+    elif keyword == "PRINT":
+        return parse_print_stmt(tokens)
+    elif keyword == "INPUT":
+        return parse_input_stmt(tokens)
+    elif keyword == "GOTO":
+        return parse_goto_stmt(tokens)
+
+def parse_expression(tokens):
+    """
+    Parse a list of tokens into a BASIC expression.
+    Args:
+        tokens (list): A list of tokens.
+    Returns:
+        Expression: The parsed expression.
+    """
+    
+    # EXPRESSION: VALUE [ OPERATOR EXPRESSION ] | '(' EXPRESSION ')'
+
+    if len(tokens) == 0:
+        return None
+
+    # Case: '(' EXPRESSION ')'
+    if tokens[0] == "(":
+        # Handle parentheses
+        tokens.pop(0)
+        expr = parse_expression(tokens[:-1])
+        if tokens and tokens[0] == ")":
+            tokens.pop(0)
+            return expr
         else:
-            click.echo(f"Syntax error: {linenum} {line}", err=True)
-            exit(1)
+            raise ValueError("Mismatched parentheses")
 
-    elif tokens[0] == "PRINTLN":
-        output = ' '.join(tokens[1:])
-        if output.startswith('"') and output.endswith('"'):
-            click.echo(output[1:-1])
+    # Case: VALUE
+    if len(tokens) == 1:
+        token = tokens.pop(0)
+        if token.isdigit():
+            return classes.Value(int(token))
         else:
-            click.echo(f"Syntax error: {linenum} {line}", err=True)
-            exit(1)
-
-    elif tokens[0] == "GOTO": # GOTO <line number>
-        if len(tokens) > 2:
-            click.echo(f"Unexpected token: {tokens[2]}; {linenum} {line}", err=True)
-            exit(1)
-
-        try:
-            goto_line = int(tokens[1])
-        except ValueError:
-            click.echo(f"Invalid line number: {tokens[1]}; {linenum} {line}", err=True)
-            exit(1)
-
-        program_counter = goto_line
-
-    elif tokens[0] == "LET": # LET <variable> = <expression>
-        if len(tokens) < 4 or tokens[2] != "=":
-            click.echo(f"Syntax error: {linenum} {line}", err=True)
-            exit(1)
-
-        variable = tokens[1]
-        expression = int(tokens[3]) if tokens[3].isdigit() else tokens[3]
-
-        variables[variable] = expression
-        if echo_output:
-            click.echo(f"LET {variable} = {expression}")
-
-    elif tokens[0] == "REM": # REM <comment>
-        return # Ignore comments
-    elif tokens[0] == "END": # END
-        click.echo("Program ended")
-        exit(0)
-
-    elif tokens[0] == "IF": # IF <condition> GOTO <line number>
-        if len(tokens) < 6 or tokens[4] != "GOTO":
-            click.echo(f"Syntax error: {linenum} {line}", err=True)
-            exit(1)
-
-        condition = tokens[1:4]
-        goto_line = tokens[5]
-
-        # Evaluate condition (condition: <variable> <operator> <value/variable>)
-        if variables.get(condition[0]) is None:
-            click.echo(f"Undefined variable: {condition[0]}; {linenum} {line}", err=True)
-            exit(1)
-
-        if condition[2].isdigit():
-            condition[2] = int(condition[2])
-        else:
-            if variables.get(condition[2]) is None:
-                click.echo(f"Undefined variable: {condition[2]}; {linenum} {line}", err=True)
-                exit(1)
-            condition[2] = variables[condition[2]]
-
-        condition_valid = False
-        if condition[1] == "==":
-            condition_valid = variables[condition[0]] == condition[2]
-        elif condition[1] == "<":
-            condition_valid = variables[condition[0]] < condition[2]
-        elif condition[1] == ">":
-            condition_valid = variables[condition[0]] > condition[2]
-        elif condition[1] == "<=":
-            condition_valid = variables[condition[0]] <= condition[2]
-        elif condition[1] == ">=":
-            condition_valid = variables[condition[0]] >= condition[2]
-        elif condition[1] == "!=":
-            condition_valid = variables[condition[0]] != condition[2]
-        else:
-            click.echo(f"Invalid operator: {condition[1]}; {linenum} {line}", err=True)
-            exit(1)
-
-        if echo_output:
-            click.echo(f"Condition valid: {condition_valid}")
-
-        if condition_valid:
-            try:
-                goto_line = int(goto_line)
-            except ValueError:
-                click.echo(f"Invalid line number: {goto_line}; {linenum} {line}", err=True)
-                exit(1)
-
-            program_counter = goto_line
-        else:
-            # Skip the GOTO statement
-            pass
+            return classes.Identifier(token)
  
-    elif tokens[0] == "INPUT": # INPUT <variable>
-        if len(tokens) != 2:
-            click.echo(f"Syntax error: {linenum} {line}", err=True)
-            exit(1)
+    # Case: VALUE [ OPERATOR EXPRESSION ]
 
-        variable = tokens[1]
-        user_input = 0
-
-        valid = False
-        while not valid:
-            # Get user input
-            user_input = click.prompt("")
-            try:
-                user_input = int(user_input)
-            except ValueError:
-                click.echo("Input must be an integer")
-                continue
-            valid = True
-
-        # Store the input in the variables dictionary
-        variables[variable] = user_input
-
-    elif tokens[0] == "ELSE":
-        if len(tokens) < 3:
-            click.echo(f"Syntax error: {linenum} {line}", err=True)
-            exit(1)
-
-        if tokens[1] == "GOTO":
-            try:
-                goto_line = int(tokens[2])
-            except ValueError:
-                click.echo(f"Invalid line number: {tokens[2]}; {linenum} {line}", err=True)
-                exit(1)
-            program_counter = goto_line
-        elif tokens[1] == "IF":
-            if len(tokens) != 7:
-                click.echo(f"Syntax error: {linenum} {line}", err=True)
-                exit(1)
-
-            condition = tokens[2:4]
-            goto_line = tokens[6]
-            # Evaluate condition (condition: <variable> <operator> <value/variable>)
-            if variables.get(condition[0]) is None:
-                click.echo(f"Undefined variable: {condition[0]}; {linenum} {line}", err=True)
-                exit(1)
-            if condition[2].isdigit():
-                condition[2] = int(condition[2])
-            else:
-                if variables.get(condition[2]) is None:
-                    click.echo(f"Undefined variable: {condition[2]}; {linenum} {line}", err=True)
-                    exit(1)
-                condition[2] = variables[condition[2]]
-            condition_valid = False
-            if condition[1] == "==":
-                condition_valid = variables[condition[0]] == condition[2]
-            elif condition[1] == "<":
-                condition_valid = variables[condition[0]] < condition[2]
-            elif condition[1] == ">":
-                condition_valid = variables[condition[0]] > condition[2]
-            elif condition[1] == "<=":
-                condition_valid = variables[condition[0]] <= condition[2]
-            elif condition[1] == ">=":
-                condition_valid = variables[condition[0]] >= condition[2]
-            elif condition[1] == "!=":
-                condition_valid = variables[condition[0]] != condition[2]
-            else:
-                click.echo(f"Invalid operator: {condition[1]}; {linenum} {line}", err=True)
-                exit(1)
-
-            if condition_valid:
-                try:
-                    goto_line = int(goto_line)
-                except ValueError:
-                    click.echo(f"Invalid line number: {goto_line}; {linenum} {line}", err=True)
-                    exit(1)
-
-                program_counter = goto_line
-            else:
-                # Skip the GOTO statement
-                pass
-
+    if len(tokens) > 1:
+        token = tokens.pop(0)
+        if token.isdigit():
+            left = classes.Value(int(token))
         else:
-            click.echo(f"Syntax error: {linenum} {line}", err=True)
-            exit(1)
+            left = classes.Identifier(token)
 
-        # TODO: for, while loops
+        if len(tokens) > 1:
+            operator = tokens.pop(0)
+            right = parse_expression(tokens)
+            return classes.Expression(left, operator, right)
 
-    else:
-        click.echo(f"Unknown command: {tokens[0]}; {linenum} {line}", err=True)
-        exit(1)
+# LET <variable> = <expression>
+def parse_let_stmt(tokens):
+    """
+    Parse a LET statement.
+    Args:
+        tokens (list): A list of tokens.
+    Returns:
+        LetStatement: The parsed LET statement.
+    """
+
+    line = ' '.join(tokens)
+
+    if len(tokens) < 3 or tokens[1] != "=":
+        raise ValueError("Invalid LET statement")
+
+    identifier = classes.Identifier(tokens[0])
+    expression = parse_expression(tokens[2:])
+
+    return classes.LetStatement(line, identifier, expression)
+
+def parse_print_stmt(tokens):
+    pass
+
+def parse_input_stmt(tokens):
+    pass
+
+def parse_goto_stmt(tokens):
+    pass
+
+def parse_if_stmt(tokens):
+    pass
+
