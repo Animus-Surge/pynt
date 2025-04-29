@@ -4,12 +4,17 @@ interpreters - basic
 BASIC interpreter
 """
 
-import click
+import click, json
 import interpreters.basic.classes as classes
 
-environment = {}
+environment = {
+    "__program_counter": 0,
+    "__verbose": False,
+    "__input": None,
+    "__internal_test_mode": False
+}
 
-program = []
+program = {}
 
 parse_line_number = 0
 
@@ -43,70 +48,52 @@ def run(file, verbose=False):
         if verbose:
             click.echo(f"Parsed: {line} -> {line_obj}")
 
-        program.append(line_obj)
+        program[line_obj.linenum] = line_obj
 
     # EXECUTION STEP
     # Set program counter
+    program_line_numbers = list(program.keys())
     environment['__program_counter'] = 0
-    current_position = environment['__program_counter']
-    current_position_index = -1
-    max_line_number = max(line.linenum for line in program)
+    environment['__max_line_number'] = max(program_line_numbers)
+    environment['__current_line'] = -1
 
-    # Handle potential infinite loops
-    loop_counter = 0
-    max_loops = 1000
-    previous_position = None
+    if environment['__verbose']:
+        click.echo(program)
+        click.echo(json.dumps(environment, indent=4))
 
     # Execute the program
-    while environment["__program_counter"] < max_line_number:
-        # Starting position
-        if current_position_index == -1:
-            current_position = program[0].linenum
-            environment["__program_counter"] = current_position
-            current_position_index = 0
+    while environment['__program_counter'] < environment['__max_line_number']:
 
-        # Handle control flow
-        elif current_position == environment["__program_counter"]:
-            previous_position = current_position
-            current_position_index += 1
-            if current_position_index >= len(program):
-                break
-            current_position = program[current_position_index].linenum
-            environment["__program_counter"] = current_position
+        # Startup
+        if environment['__current_line'] == -1:
+            try:
+                environment['__current_line'] = program_line_numbers[environment['__program_counter']]
+            except IndexError:
+                click.echo("No program loaded.")
+                exit(1)
         else:
-            current_position = environment["__program_counter"]
-            # Handle GOTO statements
-            for i, line in enumerate(program):
-                if line.linenum == current_position:
-                    current_position_index = i
-                    break
+            line_index = program_line_numbers.index(environment['__current_line'])
+            if line_index != environment['__program_counter']:
+                # Means a GOTO has occured
+                environment['__program_counter'] = line_index
+            else:
+                environment['__program_counter'] += 1
 
-        # Find the line with the current program counter
-        line = None
-        for l in program:
-            if l.linenum == environment["__program_counter"]:
-                line = l
-                break
-
-        if line is None:
+        if environment['__program_counter'] >= len(program_line_numbers):
             break
+
+        environment['__current_line'] = program_line_numbers[environment['__program_counter']]
+
+        if environment['__verbose']:
+            click.echo(f"Executing line {environment['__current_line']}")
+
+        line = program[environment['__current_line']]
+        if environment['__verbose']:
+            click.echo(f"Line: {line}")
 
         # Execute the line
-        if verbose:
-            click.echo(f"Executing: {line}")
-
-        # Infinite loops
-        if previous_position == current_position and loop_counter > max_loops:
-            click.echo("Infinite loop detected. Exiting.", err=True)
-            break
-        elif previous_position == current_position:
-            loop_counter += 1
-        else:
-            loop_counter = 0
-
-        # Execute the statement
-        line.statement.execute(environment)
-
+        line.execute(environment)
+                   
 def parse_line(line):
     """
     Parse a line of BASIC code.
@@ -193,14 +180,6 @@ def parse_tokens(tokens):
     elif keyword == "END": # END
         return parse_end_stmt(tokens)
 
-    # Loops
-    elif keyword == "WHILE": # WHILE <expression> DO <statement>
-        raise NotImplementedError("WHILE statement not implemented")
-    elif keyword == "FOR": # FOR <identifier> = <expression> TO <expression> [ STEP <expression> ]
-        raise NotImplementedError("FOR statement not implemented")
-    elif keyword == "NEXT": # NEXT <identifier>
-        raise NotImplementedError("NEXT statement not implemented")
-
     # Comments
     elif keyword == "REM": # REM <...>
         # Ignore comments
@@ -208,7 +187,10 @@ def parse_tokens(tokens):
         return classes.RemStatement(line)
 
     else:
-        raise ValueError(f"Unknown statement: {keyword}")
+        if environment['__internal_test_mode']:
+            raise ValueError(f"Unknown keyword: {keyword}; {' '.join(tokens)}")
+        click.echo(f"Unknown keyword: {keyword}; {' '.join(tokens)}", err=True)
+        exit(1)
 
 def parse_expression(tokens):
     """
@@ -221,6 +203,7 @@ def parse_expression(tokens):
     
     # EXPRESSION: VALUE [ OPERATOR EXPRESSION ] | '(' EXPRESSION ')'
 
+    line = ' '.join(tokens)
     if len(tokens) == 0:
         return None
 
@@ -256,7 +239,10 @@ def parse_expression(tokens):
             tokens.pop(0)
             return expr
         else:
-            raise ValueError("Mismatched parentheses")
+            if environment['__internal_test_mode']:
+                raise ValueError("Mismatched parentheses")
+            click.echo("Syntax error: Mismatched parentheses; {line}", err=True)
+            exit(1)
 
 
 # LET <variable> = <expression>
@@ -270,9 +256,11 @@ def parse_let_stmt(tokens):
     """
 
     line = ' '.join(tokens)
-
     if len(tokens) < 3 or tokens[1] != "=":
-        raise ValueError("Invalid LET statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid LET statement")
+        click.echo("Syntax error: Invalid LET statement; {line}", err=True)
+        exit(1)
 
     identifier = classes.Identifier(tokens[0])
     expression = parse_expression(tokens[2:])
@@ -291,12 +279,19 @@ def parse_print_stmt(tokens):
 
     line = ' '.join(tokens)
     if len(tokens) == 0:
-        raise ValueError("Invalid PRINT statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid PRINT statement")
+        click.echo("Syntax error: Invalid PRINT statement; {line}", err=True)
+        exit(1)
 
     expression = parse_expression(tokens)
 
     if expression is None:
-        raise ValueError("Invalid PRINT statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid PRINT statement")
+        click.echo("Syntax error: Invalid PRINT statement; {line}", err=True)
+        exit(1)
+
     return classes.PrintStatement(line, expression)
 
 # INPUT <identifier> <string>
@@ -312,7 +307,10 @@ def parse_input_stmt(tokens):
     line = ' '.join(tokens)
 
     if len(tokens) == 0:
-        raise ValueError("Invalid INPUT statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid INPUT statement")
+        click.echo("Syntax error: Invalid INPUT statement; {line}", err=True)
+        exit(1)
     
     identifier = classes.Identifier(tokens[0])
     prompt = tokens[1] if len(tokens) > 1 else None
@@ -330,7 +328,10 @@ def parse_goto_stmt(tokens):
     """
     line = ' '.join(tokens)
     if len(tokens) == 0:
-        raise ValueError("Invalid GOTO statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid GOTO statement")
+        click.echo("Syntax error: Invalid GOTO statement; {line}", err=True)
+        exit(1)
     
     line_number = int(tokens[0])
     return classes.GotoStatement(line, line_number)
@@ -347,17 +348,30 @@ def parse_if_stmt(tokens):
 
     line = ' '.join(tokens)
     if len(tokens) < 3:
-        raise ValueError("Invalid IF statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid IF statement")
+        click.echo("Syntax error: Invalid IF statement; {line}", err=True)
+        exit(1)
+
     goto_index = tokens.index("GOTO")
     if goto_index == -1:
-        raise ValueError("Invalid IF statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid IF statement")
+        click.echo("Syntax error: Missing GOTO statement; {line}", err=True)
+        exit(1)
 
     expression = parse_expression(tokens[:goto_index])
     if expression is None:
-        raise ValueError("Invalid IF statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid IF statement")
+        click.echo("Syntax error: Invalid IF expression; {line}", err=True)
+        exit(1)
 
     if len(tokens) < goto_index + 2:
-        raise ValueError("Invalid IF statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid IF statement")
+        click.echo("Syntax error: Missing GOTO value; {line}", err=True)
+        exit(1)
     line_number = int(tokens[goto_index + 1])
     return classes.IfStatement(line, expression, line_number)
 
@@ -373,22 +387,23 @@ def parse_else_stmt(tokens):
 
     line = ' '.join(tokens)
     if len(tokens) == 0:
-        raise ValueError("Invalid ELSE statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid ELSE statement")
+        click.echo("Syntax error: Invalid ELSE statement; {line}", err=True)
+        exit(1)
 
     if tokens[0] != "GOTO":
-        raise ValueError("Invalid ELSE statement")
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid ELSE statement")
+        click.echo("Syntax error: Missing GOTO statement; {line}", err=True)
+        exit(1)
+
+    if len(tokens) < 2:
+        if environment['__internal_test_mode']:
+            raise ValueError("Invalid ELSE statement")
+        click.echo("Syntax error: Missing GOTO value; {line}", err=True)
+        exit(1)
 
     line_number = int(tokens[1])
     return classes.ElseStatement(line, line_number)
 
-def parse_end_stmt(tokens):
-    pass
-
-def parse_while_stmt(tokens):
-    pass
-
-def parse_for_stmt(tokens):
-    pass
-
-def parse_next_stmt(tokens):
-    pass

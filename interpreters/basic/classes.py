@@ -73,9 +73,6 @@ class Identifier(Value):
         """
         Evaluate the identifier.
         """
-        if self.value:
-            return self.value
-
         if self.name in environment:
             self.value = environment[self.name]
             return environment[self.name]
@@ -160,7 +157,7 @@ class Line:
     def __repr__(self):
         return f"{self.linenum}: {self.statement}"
 
-    def evaluate(self, environment):
+    def execute(self, environment):
         """
         Evaluate the line.
         """
@@ -283,7 +280,7 @@ class GotoStatement(Statement):
         Execute the GOTO statement.
         """
         # Set the program counter to the specified line number
-        environment['__program_counter'] = self.line_number
+        environment['__current_line'] = self.line_number
 
         if environment["__verbose"]:
             click.echo(f"GOTO {self.line_number}")
@@ -337,7 +334,7 @@ class IfStatement (Statement): # IF <expression> GOTO <line_number>
         Execute the IF statement.
         """
         if self.condition.evaluate(environment):
-            environment['__program_counter'] = self.line_number
+            environment['__current_line'] = self.line_number
 
 class ElseStatement(Statement):
     """
@@ -358,4 +355,4 @@ class ElseStatement(Statement):
         """
         Execute the ELSE statement.
         """
-        environment['__program_counter'] = self.line_number
+        environment['__current_line'] = self.line_number
